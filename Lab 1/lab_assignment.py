@@ -23,33 +23,59 @@ for i, row in facility_data.iterrows():
         distance[(facility, customer)] = df.loc[i, customer]
 
 # --- Gurobi Model ---
-m = Model("CapacitatedFacilityLocation")
+m = Model("FacilityLocation_Lab1")
 
-y = m.addVars(facilities, vtype=GRB.BINARY, name="Open")
-x = m.addVars(facilities, customers, vtype=GRB.CONTINUOUS, name="Ship")
+# Parameters
+revenue_per_unit = 1000 # Assumed constant profit per unit delivered
 
+# Decision variables
+y = m.addVars(facilities, vtype=GRB.BINARY, name="Open")  # Open facility
+x = m.addVars(facilities, customers, vtype=GRB.CONTINUOUS, name="Ship")  # Quantity shipped
+z = m.addVars(facilities, customers, vtype=GRB.BINARY, name="Assign")  # Assignment
+
+# --- Objective: Maximize profit ---
+# Revenue from shipped goods - Fixed costs - Transport cost
 m.setObjective(
-    quicksum(fixed_cost[i] * y[i] for i in facilities) +
-    quicksum(distance[i, j] * x[i, j] for i in facilities for j in customers),
-    GRB.MINIMIZE
+    quicksum(revenue_per_unit * x[i, j] for i in facilities for j in customers)
+    - quicksum(fixed_cost[i] * y[i] for i in facilities)
+    - quicksum(distance[i, j] * x[i, j] for i in facilities for j in customers),
+    GRB.MAXIMIZE
 )
 
-for j in customers:
-    m.addConstr(quicksum(x[i, j] for i in facilities) == demand[j], name=f"Demand_{j}")
+# --- Constraints ---
 
+# 1. Each customer assigned to at most one facility
+for j in customers:
+    m.addConstr(quicksum(z[i, j] for i in facilities) <= 1, name=f"AssignOnce_{j}")
+
+# 2. Shipping only allowed if assigned
+for i in facilities:
+    for j in customers:
+        m.addConstr(x[i, j] <= demand[j] * z[i, j], name=f"ShipIfAssigned_{i}_{j}")
+
+# 3. Facility capacity not exceeded
 for i in facilities:
     m.addConstr(quicksum(x[i, j] for j in customers) <= capacity[i] * y[i], name=f"Capacity_{i}")
 
+# 4. Facility must be open to serve
+for i in facilities:
+    for j in customers:
+        m.addConstr(z[i, j] <= y[i], name=f"ServeIfOpen_{i}_{j}")
+
+# 5. At most 3 facilities can be open
+m.addConstr(quicksum(y[i] for i in facilities) <= 3, name="Max3Facilities")
+
+# --- Solve ---
 m.optimize()
 
 # --- Print results ---
 if m.status == GRB.OPTIMAL:
-    print(f"Total Cost: {m.objVal:.2f}")
+    print(f"\nTotal Profit: {m.objVal:.2f}")
     for i in facilities:
         if y[i].x > 0.5:
             print(f"\nFacility {i} is OPEN")
             for j in customers:
                 if x[i, j].x > 0:
-                    print(f"  Ships {x[i, j].x} units to Customer {j}")
+                    print(f"  Ships {x[i, j].x:.1f} units to Customer {j}")
 else:
     print("No optimal solution found.")
